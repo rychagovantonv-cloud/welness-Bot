@@ -33,7 +33,7 @@ from database.repos import runs as runs_repo
 from integrations.github import commit_approved
 from parsers.base import RawItem
 from parsers.pubmed import PubMedParser
-from parsers.rss import make_default_rss_parsers
+from parsers.rss import RSS_BY_CATEGORY, make_rss_parsers
 
 router = Router(name="radar")
 
@@ -44,12 +44,20 @@ _pending_cards: Final[dict[int, RadarCard]] = {}
 LLM_BATCH_SIZE = 10
 
 
+SCIENCE_SCOPES = {"science", "pubmed"}
+RSS_SCOPES = {"travel", "wellness", "magazines", "rss"}
+ALL_SCOPES = {"all"} | SCIENCE_SCOPES | RSS_SCOPES
+
+
 async def _gather_raw_items(scope: str) -> list[RawItem]:
     parsers_to_run: list = []
-    if scope in ("all", "pubmed"):
+    if scope in ("all", "pubmed", "science"):
         parsers_to_run.append(PubMedParser())
-    if scope in ("all", "rss"):
-        parsers_to_run.extend(make_default_rss_parsers())
+
+    if scope == "all" or scope == "rss":
+        parsers_to_run.extend(make_rss_parsers("all"))
+    elif scope in RSS_BY_CATEGORY:
+        parsers_to_run.extend(make_rss_parsers(scope))
 
     if not parsers_to_run:
         return []
@@ -181,10 +189,17 @@ async def _process_and_send(message: Message, scope: str) -> None:
 @router.message(Command("radar_now"))
 async def cmd_radar_now(message: Message, command: CommandObject) -> None:
     arg = (command.args or "all").strip().lower()
-    if arg not in ("all", "pubmed", "rss"):
+    if arg not in ALL_SCOPES:
         await message.answer(
-            "Использование: <code>/radar_now [all|pubmed|rss]</code>\n"
-            "Без аргумента = all."
+            "Использование: <code>/radar_now [scope]</code>\n\n"
+            "<b>scope:</b>\n"
+            "• <code>all</code> — всё (по умолчанию)\n"
+            "• <code>science</code> или <code>pubmed</code> — научные обзоры/мета-анализы\n"
+            "• <code>travel</code> — Guardian/BBC Travel, CN Traveler, El País Viajero\n"
+            "• <code>wellness</code> — BBC Health, Psyche, Aeon\n"
+            "• <code>magazines</code> — Discover, Nautilus, MIT Tech, Guardian Science\n"
+            "• <code>rss</code> — все RSS, без PubMed",
+            parse_mode="HTML",
         )
         return
     await _process_and_send(message, arg)

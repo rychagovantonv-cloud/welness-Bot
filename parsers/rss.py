@@ -128,14 +128,67 @@ def _strip_html(text: str) -> str:
     return text.strip()
 
 
-# Стартовый набор источников для Phase 1.
-# BBC и Guardian Travel — стабильные, full-content RSS.
-# Дальше расширяем после ручной валидации других feed'ов.
-DEFAULT_RSS_SOURCES: dict[str, str] = {
-    "guardian_travel": "https://www.theguardian.com/travel/rss",
-    "bbc_travel": "https://www.bbc.com/travel/feed.rss",
+# RSS-источники сгруппированы по категориям для /radar_now <scope>.
+# Все URL'ы проверены через curl в 2026-05 (см. notes ниже).
+# Если источник умер — он скорее всего не возродится: добавляем альтернативный путь
+# через Serper.dev News API (Phase 1.5+) или Google News URL decoder.
+
+RSS_BY_CATEGORY: dict[str, dict[str, str]] = {
+    "travel": {
+        "guardian_travel": "https://www.theguardian.com/travel/rss",
+        "bbc_travel": "https://www.bbc.com/travel/feed.rss",
+        "cntraveler": "https://www.cntraveler.com/feed/rss",
+        # Spanish — El País Viajero (релевантно гео-фокусу: Испания)
+        "elpais_viajero": (
+            "https://feeds.elpais.com/mrss-s/pages/ep/site/elviajero.elpais.com/portada"
+        ),
+    },
+    "wellness": {
+        "bbc_health": "https://feeds.bbci.co.uk/news/health/rss.xml",
+        # Psyche — психология/философия, идеальный фит для Reflective Traveler
+        "psyche": "https://psyche.co/feed.rss",
+        # Aeon — длинные эссе о смысле, идентичности, философии
+        "aeon": "https://aeon.co/feed.rss",
+    },
+    "magazines": {
+        "guardian_science": "https://www.theguardian.com/science/rss",
+        "discover_magazine": "https://www.discovermagazine.com/rss/all",
+        # Nautilus — наука как нарратив, отличный голос
+        "nautilus": "https://nautil.us/feed/",
+        "mit_tech_review": "https://www.technologyreview.com/feed/",
+    },
+}
+
+# Источники из ТЗ, у которых RSS умер на момент 2026-05.
+# Реактивировать можно через Serper.dev News (платный) или Google News decoder.
+DEAD_SOURCES_TODO: dict[str, str] = {
+    "afar": "https://www.afar.com — 404 на /rss, /feed, /feed.xml",
+    "travel_leisure": "https://www.travelandleisure.com — 404 на /feed, /rss",
+    "natgeo": "https://www.nationalgeographic.com — все RSS-эндпоинты дёрнули в 2024+",
+    "natgeo_viajes": "https://www.nationalgeographic.com.es — 403 (Cloudflare блок)",
+    "viajar": "https://viajar.elperiodico.com — 404 на feed/rss",
+    "wanderlust": "https://www.wanderlust.co.uk — RSS отдаёт пустой ответ",
+    "discovery": "https://www.discovery.com — 403 (другой сайт от Discover Magazine)",
+    "wilderness_travel": "wildernesstravel.com — это туроператор, не медиа, RSS не существует",
+    "escapism": "escapismmagazine.com — нет публичного feed",
+    "luxury_traveling": "luxurytraveling.com — RSS пуст",
 }
 
 
-def make_default_rss_parsers(max_items: int = 10) -> list[RSSParser]:
-    return [RSSParser(name=k, feed_url=v, max_items=max_items) for k, v in DEFAULT_RSS_SOURCES.items()]
+def make_rss_parsers(category: str = "all", max_items: int = 8) -> list[RSSParser]:
+    """Возвращает список RSSParser для указанной категории.
+
+    category: 'travel' | 'wellness' | 'magazines' | 'all'.
+    """
+    if category == "all":
+        sources = {k: v for cat in RSS_BY_CATEGORY.values() for k, v in cat.items()}
+    elif category in RSS_BY_CATEGORY:
+        sources = RSS_BY_CATEGORY[category]
+    else:
+        return []
+    return [RSSParser(name=k, feed_url=v, max_items=max_items) for k, v in sources.items()]
+
+
+# Backward-compat для старого вызова.
+def make_default_rss_parsers(max_items: int = 8) -> list[RSSParser]:
+    return make_rss_parsers("all", max_items=max_items)

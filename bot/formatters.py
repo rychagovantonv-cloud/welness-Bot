@@ -5,7 +5,16 @@ from ai_engine.schemas import RadarCard
 SOURCE_EMOJI = {
     "pubmed": "🧬",
     "guardian_travel": "📰",
+    "guardian_science": "🔬",
     "bbc_travel": "📰",
+    "bbc_health": "🩺",
+    "cntraveler": "✈️",
+    "elpais_viajero": "🌍",
+    "psyche": "🧠",
+    "aeon": "📜",
+    "nautilus": "🐚",
+    "discover_magazine": "🔭",
+    "mit_tech_review": "💡",
 }
 
 TRANSFORMATION_EMOJI = {
