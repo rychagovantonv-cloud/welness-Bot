@@ -190,7 +190,7 @@ async def _process_and_send(message: Message, scope: str) -> None:
             )
 
 
-@router.message(Command("radar_now"))
+@router.message(Command("radar_now", "radar"))
 async def cmd_radar_now(message: Message, command: CommandObject) -> None:
     arg = (command.args or "all").strip().lower()
     if arg not in ALL_SCOPES:
@@ -270,7 +270,7 @@ def _humanize_age(dt: datetime) -> str:
     return f"{secs // 86400}д"
 
 
-@router.message(Command("radar_trash"))
+@router.message(Command("radar_trash", "musor"))
 async def cmd_radar_trash(message: Message, command: CommandObject) -> None:
     try:
         limit = int(command.args.strip()) if command.args else 20
@@ -304,7 +304,7 @@ async def cmd_radar_trash(message: Message, command: CommandObject) -> None:
     )
 
 
-@router.message(Command("radar_seen"))
+@router.message(Command("radar_seen", "istoria"))
 async def cmd_radar_seen(message: Message, command: CommandObject) -> None:
     try:
         limit = int(command.args.strip()) if command.args else 30

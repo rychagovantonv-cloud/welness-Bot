@@ -27,17 +27,19 @@ async def cmd_start(message: Message) -> None:
 async def cmd_help(message: Message) -> None:
     await message.answer(
         "<b>Команды</b>\n\n"
-        "<b>Общие:</b>\n"
+        "<b>📊 Общие:</b>\n"
         "/start — приветствие\n"
         "/help — этот список\n"
-        "/status — статус последних запусков\n\n"
-        "<b>Radar (новости + наука):</b>\n"
-        "/radar_now [all|science|travel|wellness|magazines|rss] — запуск\n"
-        "/radar_trash [N] — последние N помеченных мусором (default 20)\n"
-        "/radar_seen [N] — последние N спарсенных (для дедупа, default 30)\n\n"
-        "<b>Insight (анализ ЦА):</b>\n"
-        "/insight &lt;reddit_url&gt; — разбор конкретного треда\n"
-        "/insight_find &lt;тема&gt; — бот САМ ищет треды по теме",
+        "/status — последние запуски\n\n"
+        "<b>📡 Радар (новости + наука):</b>\n"
+        "/radar [all|science|travel|wellness|magazines|rss] — запуск\n"
+        "/musor [N] — последние N помеченных мусором (default 20)\n"
+        "/istoria [N] — последние N спарсенных (default 30)\n\n"
+        "<b>🔍 Разбор ЦА:</b>\n"
+        "/razbor &lt;reddit_url&gt; — анализ конкретного треда\n"
+        "/poisk &lt;тема&gt; — бот САМ найдёт треды по теме\n\n"
+        "<i>Старые имена тоже работают: /radar_now, /radar_trash, "
+        "/radar_seen, /insight, /insight_find.</i>",
         parse_mode="HTML",
     )
 

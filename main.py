@@ -3,6 +3,7 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 from aiohttp import web
 from loguru import logger
 
@@ -12,6 +13,18 @@ from config import settings
 from database.client import engine, ping
 from observability.logging import setup_logging
 from observability.sentry import setup_sentry
+
+# Меню команд, видимое в TG при нажатии "/" или кнопке menu.
+BOT_COMMANDS = [
+    BotCommand(command="radar", description="Запустить радар (новости + наука)"),
+    BotCommand(command="poisk", description="Найти Reddit-треды по теме"),
+    BotCommand(command="razbor", description="Разбор треда по URL"),
+    BotCommand(command="musor", description="Что помечали мусором"),
+    BotCommand(command="istoria", description="Что уже спарсено (для дедупа)"),
+    BotCommand(command="status", description="Последние запуски"),
+    BotCommand(command="help", description="Справка по всем командам"),
+    BotCommand(command="start", description="Приветствие"),
+]
 
 
 async def healthcheck(request: web.Request) -> web.Response:
@@ -53,6 +66,7 @@ async def main() -> None:
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)
+        await bot.set_my_commands(BOT_COMMANDS)
         logger.info("polling started")
         await dp.start_polling(bot, handle_signals=True)
     finally:

@@ -119,7 +119,7 @@ async def _run_insight_pipeline(message: Message, url: str) -> None:
     )
 
 
-@router.message(Command("insight"))
+@router.message(Command("insight", "razbor"))
 async def cmd_insight(message: Message, command: CommandObject) -> None:
     arg = (command.args or "").strip()
     if not arg:
@@ -143,7 +143,7 @@ async def cmd_insight(message: Message, command: CommandObject) -> None:
     await _run_insight_pipeline(message, arg)
 
 
-@router.message(Command("insight_find"))
+@router.message(Command("insight_find", "poisk"))
 async def cmd_insight_find(message: Message, command: CommandObject) -> None:
     query = (command.args or "").strip()
     if not query:
