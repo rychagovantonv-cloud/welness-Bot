@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     gemini_model: str = "gemini-2.5-flash"
 
+    # Reddit script-app: обязательно для production (anonymous .json
+    # блокируется Reddit'ом из cloud-IP включая Railway).
+    reddit_client_id: SecretStr | None = None
+    reddit_client_secret: SecretStr | None = None
+    reddit_user_agent: str = "welness-bot/0.1 (by /u/rychagovantonv-cloud)"
+
     sentry_dsn: SecretStr | None = None
     log_level: str = "INFO"
     env: Literal["dev", "prod"] = "prod"

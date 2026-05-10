@@ -1,19 +1,35 @@
-"""Reddit-парсер через публичный .json эндпоинт. Без OAuth, без app.
+"""Reddit-парсер через OAuth (script app, application-only flow).
 
-Принимает любые формы URL:
+Anonymous .json эндпоинт с 2023 заблокирован Reddit'ом для всех cloud IP.
+Поэтому используем application-only OAuth: client_credentials grant даёт
+Bearer-токен на 1 час, после чего обновляем.
+
+Если REDDIT_CLIENT_ID/SECRET не заданы — fallback на www.reddit.com/.json
+(работает только локально, в продакшене 403).
+
+Принимает любые формы URL треда:
 - https://www.reddit.com/r/solotravel/comments/abc123/title/
 - https://reddit.com/r/solotravel/comments/abc123/
 - https://old.reddit.com/r/solotravel/comments/abc123/
 """
 
+import asyncio
 import re
+import time
 from dataclasses import dataclass
 
 import httpx
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-USER_AGENT = "welness-bot/0.1 (audience research; contact rychagovantonv-cloud)"
+from config import settings
+
+# User-Agent теперь берётся из settings, см. _http_headers().
+
+# OAuth state (in-memory, refresh on expiry)
+_oauth_token: str | None = None
+_oauth_expires_at: float = 0.0
+_oauth_lock = asyncio.Lock()
 
 REDDIT_URL_RE = re.compile(
     r"^https?://(?:www\.|old\.|new\.|np\.)?reddit\.com/r/([^/]+)/comments/([a-z0-9]+)",
@@ -56,9 +72,61 @@ def normalize_reddit_url(url: str) -> tuple[str, str] | None:
     return m.group(1), m.group(2).lower()
 
 
+def _has_oauth() -> bool:
+    return bool(settings.reddit_client_id and settings.reddit_client_secret)
+
+
+async def _get_oauth_token() -> str | None:
+    """Возвращает свежий Bearer-токен или None если OAuth не настроен."""
+    global _oauth_token, _oauth_expires_at
+    if not _has_oauth():
+        return None
+
+    # Запас 60с до реального истечения чтобы не словить просроченный токен в полёте
+    if _oauth_token and time.time() < _oauth_expires_at - 60:
+        return _oauth_token
+
+    async with _oauth_lock:
+        if _oauth_token and time.time() < _oauth_expires_at - 60:
+            return _oauth_token
+
+        client_id = settings.reddit_client_id.get_secret_value()
+        client_secret = settings.reddit_client_secret.get_secret_value()
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                "https://www.reddit.com/api/v1/access_token",
+                auth=(client_id, client_secret),
+                headers={"User-Agent": settings.reddit_user_agent},
+                data={"grant_type": "client_credentials"},
+            )
+            r.raise_for_status()
+            payload = r.json()
+
+        _oauth_token = payload["access_token"]
+        ttl = int(payload.get("expires_in", 3600))
+        _oauth_expires_at = time.time() + ttl
+        logger.info("reddit oauth refreshed", ttl_sec=ttl)
+        return _oauth_token
+
+
+async def _http_headers() -> dict[str, str]:
+    headers = {"User-Agent": settings.reddit_user_agent}
+    token = await _get_oauth_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _api_base() -> str:
+    """Если есть OAuth — используем oauth.reddit.com, иначе www.reddit.com."""
+    return "https://oauth.reddit.com" if _has_oauth() else "https://www.reddit.com"
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10), reraise=True)
 async def _fetch_json(client: httpx.AsyncClient, url: str) -> list:
-    r = await client.get(url, timeout=20)
+    headers = await _http_headers()
+    r = await client.get(url, headers=headers, timeout=20)
     r.raise_for_status()
     return r.json()
 
@@ -73,8 +141,13 @@ async def fetch_thread(
         return None
     subreddit, thread_id = parsed
 
-    json_url = f"https://www.reddit.com/r/{subreddit}/comments/{thread_id}.json?sort=top&limit={top_n}"
-    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
+    base = _api_base()
+    # OAuth endpoint без .json suffix; на www.reddit.com нужен .json
+    if base.endswith("oauth.reddit.com"):
+        json_url = f"{base}/r/{subreddit}/comments/{thread_id}?sort=top&limit={top_n}&raw_json=1"
+    else:
+        json_url = f"{base}/r/{subreddit}/comments/{thread_id}.json?sort=top&limit={top_n}"
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
             data = await _fetch_json(client, json_url)
         except Exception as e:
@@ -181,14 +254,19 @@ async def _search_endpoint(
     client: httpx.AsyncClient, *, query: str, subreddit: str | None,
     time_range: str, sort: str, limit: int,
 ) -> list[dict]:
-    base = "https://www.reddit.com"
+    base = _api_base()
+    suffix = "" if base.endswith("oauth.reddit.com") else ".json"
     if subreddit:
-        url = f"{base}/r/{subreddit}/search.json"
-        params = {"q": query, "restrict_sr": "1", "sort": sort, "t": time_range, "limit": limit}
+        url = f"{base}/r/{subreddit}/search{suffix}"
+        params = {
+            "q": query, "restrict_sr": "1", "sort": sort,
+            "t": time_range, "limit": limit, "raw_json": 1,
+        }
     else:
-        url = f"{base}/search.json"
-        params = {"q": query, "sort": sort, "t": time_range, "limit": limit}
-    r = await client.get(url, params=params, timeout=20)
+        url = f"{base}/search{suffix}"
+        params = {"q": query, "sort": sort, "t": time_range, "limit": limit, "raw_json": 1}
+    headers = await _http_headers()
+    r = await client.get(url, params=params, headers=headers, timeout=20)
     r.raise_for_status()
     children = r.json().get("data", {}).get("children", [])
     return [c.get("data", {}) for c in children if c.get("kind") == "t3"]
@@ -214,9 +292,7 @@ async def search_threads(
     """
     diag = {"subs_ok": 0, "subs_failed": 0, "raw_total": 0, "after_filter": 0}
 
-    async with httpx.AsyncClient(
-        headers={"User-Agent": USER_AGENT}, follow_redirects=True
-    ) as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         all_hits: dict[str, dict] = {}
 
         async def _do_global() -> None:
