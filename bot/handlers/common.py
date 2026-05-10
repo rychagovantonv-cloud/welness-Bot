@@ -50,19 +50,22 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
+    from config import settings as _settings
+
     async with session_scope() as session:
         result = await session.execute(
             select(RunLog).order_by(RunLog.started_at.desc()).limit(8)
         )
         runs = result.scalars().all()
-        summary = await runs_repo.get_cost_summary(session)
+        spent = await runs_repo.get_spent_since(session, _settings.anthropic_balance_as_of)
 
-    budget_line = format_budget_line(None, summary)
+    budget_line = format_budget_line(None, spent)
 
     if not runs:
-        await message.answer(
-            f"📊 Запусков ещё не было.\n\n{budget_line}", parse_mode="HTML"
-        )
+        msg = "📊 Запусков ещё не было."
+        if budget_line:
+            msg += f"\n\n{budget_line}"
+        await message.answer(msg, parse_mode="HTML")
         return
 
     lines = ["📊 <b>Последние запуски:</b>\n"]
@@ -74,8 +77,7 @@ async def cmd_status(message: Message) -> None:
             f"{status_icon} <code>{r.job_name}</code> {when}  ·  "
             f"{r.items_total or 0}/{r.items_kept or 0}/{r.items_sent or 0}  ·  {cost_str}"
         )
-    lines.append("")
-    lines.append("<i>Формат: всего/новых/отправлено</i>")
-    lines.append("")
-    lines.append(budget_line)
+    if budget_line:
+        lines.append("")
+        lines.append(budget_line)
     await message.answer("\n".join(lines), parse_mode="HTML")

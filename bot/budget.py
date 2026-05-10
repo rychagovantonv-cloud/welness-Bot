@@ -1,4 +1,9 @@
-"""Утилиты бюджет-строки для отображения в TG после операций с LLM."""
+"""Стоимость запуска + остаток баланса Anthropic-кабинета.
+
+Anthropic не отдаёт реальный остаток через публичный API. Поэтому работаем
+по снимку: вы один раз указываете в env свой текущий баланс + timestamp,
+бот вычитает все расходы которые были ПОСЛЕ этого момента.
+"""
 
 from decimal import Decimal
 
@@ -7,35 +12,34 @@ from database.client import session_scope
 from database.repos import runs as runs_repo
 
 
-def _budget_indicator(month_spent: Decimal) -> str:
-    """Возвращает префикс-эмодзи в зависимости от % использования бюджета."""
-    cap = settings.budget_monthly_usd
-    if cap <= 0:
+def _balance_indicator(balance: Decimal, initial: Decimal) -> str:
+    """⚠️/🚨 если остаток мал относительно начального снимка."""
+    if initial <= 0:
         return ""
-    pct = month_spent / cap
-    if pct >= 1:
+    pct = balance / initial
+    if pct <= 0:
         return "🚨 "
-    if pct >= 0.8:
+    if pct <= 0.2:
         return "⚠️ "
-    if pct >= 0.5:
-        return "🟡 "
     return ""
 
 
-def format_budget_line(this_run_cost: Decimal | None, summary: dict[str, Decimal]) -> str:
-    """Форматирует одну компактную строку: запуск + сегодня + месяц / лимит."""
+def format_budget_line(this_run_cost: Decimal | None, spent_since_snapshot: Decimal) -> str:
+    """Одна строка: запуск + остаток (если снимок задан)."""
     parts: list[str] = []
     if this_run_cost is not None:
         parts.append(f"запуск: ${this_run_cost:.4f}")
-    parts.append(f"сегодня: ${summary['today']:.4f}")
-    indicator = _budget_indicator(summary["month"])
-    cap = settings.budget_monthly_usd
-    parts.append(f"{indicator}месяц: ${summary['month']:.2f} / ${cap:.0f}")
+    if settings.anthropic_balance_usd is not None:
+        initial = settings.anthropic_balance_usd
+        balance = initial - spent_since_snapshot
+        ind = _balance_indicator(balance, initial)
+        parts.append(f"{ind}остаток: ${balance:.2f}")
+    if not parts:
+        return ""
     return "💰 " + "  ·  ".join(parts)
 
 
 async def get_budget_line(this_run_cost: Decimal | None) -> str:
-    """Шорткат: открывает сессию, получает summary, форматирует строку."""
     async with session_scope() as session:
-        summary = await runs_repo.get_cost_summary(session)
-    return format_budget_line(this_run_cost, summary)
+        spent = await runs_repo.get_spent_since(session, settings.anthropic_balance_as_of)
+    return format_budget_line(this_run_cost, spent)

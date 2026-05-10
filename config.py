@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -32,8 +33,15 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     env: Literal["dev", "prod"] = "prod"
 
-    # Budget tracking (no hard cap, только информационные индикаторы).
-    budget_monthly_usd: Decimal = Decimal("10.00")
+    # Снимок баланса Anthropic-кабинета на конкретный момент.
+    # Anthropic не отдаёт реальный баланс через API.
+    # Когда пополняете аккаунт — обновляйте оба env:
+    #   ANTHROPIC_BALANCE_USD=15.00
+    #   ANTHROPIC_BALANCE_AS_OF=2026-05-15T10:00:00Z
+    # Бот покажет остаток = balance_usd − sum(cost_usd где started_at >= as_of).
+    # Если оба None — остаток не показывается, только стоимость запуска.
+    anthropic_balance_usd: Decimal | None = None
+    anthropic_balance_as_of: datetime | None = None
 
     port: int = 8080
 

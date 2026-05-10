@@ -35,26 +35,10 @@ async def finish(
     await session.flush()
 
 
-async def get_cost_summary(session: AsyncSession) -> dict[str, Decimal]:
-    """Возвращает {'today': X, 'month': Y, 'total': Z} в USD."""
-    now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    month_start = today_start.replace(day=1)
-
-    today_q = await session.execute(
-        select(func.coalesce(func.sum(RunLog.cost_usd), 0)).where(
-            RunLog.started_at >= today_start
-        )
-    )
-    month_q = await session.execute(
-        select(func.coalesce(func.sum(RunLog.cost_usd), 0)).where(
-            RunLog.started_at >= month_start
-        )
-    )
-    total_q = await session.execute(select(func.coalesce(func.sum(RunLog.cost_usd), 0)))
-
-    return {
-        "today": Decimal(today_q.scalar() or 0),
-        "month": Decimal(month_q.scalar() or 0),
-        "total": Decimal(total_q.scalar() or 0),
-    }
+async def get_spent_since(session: AsyncSession, as_of: datetime | None) -> Decimal:
+    """Сумма cost_usd с заданного момента (или со старта если as_of=None)."""
+    stmt = select(func.coalesce(func.sum(RunLog.cost_usd), 0))
+    if as_of is not None:
+        stmt = stmt.where(RunLog.started_at >= as_of)
+    result = await session.execute(stmt)
+    return Decimal(result.scalar() or 0)
