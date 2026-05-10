@@ -9,7 +9,7 @@ from github import Auth, Github, GithubException
 from github.Repository import Repository
 from loguru import logger
 
-from ai_engine.schemas import RadarCard
+from ai_engine.schemas import InsightReport, RadarCard
 from config import settings
 
 
@@ -114,4 +114,89 @@ async def commit_approved(
         )
     except Exception as e:
         logger.error("github commit failed", error=str(e), title=card.title[:60])
+        raise
+
+
+# ---- Insight (Phase 2) ----
+
+
+def _build_insight_markdown(
+    report: InsightReport, source_url: str, source_label: str
+) -> str:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fm = (
+        "---\n"
+        f"source_label: {_yaml_str(source_label)}\n"
+        f"source_url: {source_url}\n"
+        f"audience_segment: {_yaml_str(report.audience_segment)}\n"
+        f"pain_points_count: {len(report.pain_points)}\n"
+        f"approved_at: {today}\n"
+        "---\n\n"
+    )
+    body: list[str] = [f"# Insight: {source_label}\n"]
+    body.append(f"**Источник:** [{source_url}]({source_url})\n")
+    body.append(f"**Сегмент:** {report.audience_segment}\n")
+
+    body.append("## Боли\n")
+    for i, pp in enumerate(report.pain_points, 1):
+        body.append(f"### {i}. {pp.title} _({pp.category}, freq={pp.frequency})_")
+        body.append(pp.description)
+        body.append("")
+        for q in pp.representative_quotes:
+            body.append(f"> {q}")
+        body.append("")
+
+    body.append("## Желания\n")
+    for d in report.desires:
+        body.append(f"- {d}")
+    body.append("")
+
+    body.append("## Триггеры\n")
+    for t in report.triggers:
+        body.append(f"- {t}")
+    body.append("")
+
+    body.append("## AEO-конспект\n")
+    body.append(report.summary_for_aeo)
+    body.append("")
+
+    return fm + "\n".join(body)
+
+
+def _commit_insight_sync(
+    report: InsightReport, *, source_url: str, source_label: str, slug: str
+) -> CommitResult:
+    repo = _get_repo()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    safe_slug = _slugify(slug) or "thread"
+    path = f"insights/{today}-{safe_slug}.md"
+    content = _build_insight_markdown(report, source_url, source_label)
+    message = f"Insight: {source_label[:80]}"
+    try:
+        result = repo.create_file(path, message, content, branch="main")
+    except GithubException as e:
+        if e.status == 422:
+            ts = datetime.now(timezone.utc).strftime("%H%M%S")
+            base, ext = path.rsplit(".", 1)
+            path = f"{base}-{ts}.{ext}"
+            result = repo.create_file(path, message, content, branch="main")
+        else:
+            raise
+    commit = result["commit"]
+    return CommitResult(sha=commit.sha, path=path, html_url=commit.html_url)
+
+
+async def commit_insight(
+    report: InsightReport, *, source_url: str, source_label: str, slug: str
+) -> CommitResult:
+    try:
+        return await asyncio.to_thread(
+            _commit_insight_sync,
+            report,
+            source_url=source_url,
+            source_label=source_label,
+            slug=slug,
+        )
+    except Exception as e:
+        logger.error("github insight commit failed", error=str(e), label=source_label[:60])
         raise

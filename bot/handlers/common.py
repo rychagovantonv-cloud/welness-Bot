@@ -26,15 +26,17 @@ async def cmd_start(message: Message) -> None:
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     await message.answer(
-        "<b>Команды</b>\n"
+        "<b>Команды</b>\n\n"
+        "<b>Общие:</b>\n"
         "/start — приветствие\n"
         "/help — этот список\n"
-        "/status — статус последних запусков\n"
-        "/radar_now [all|science|travel|wellness|magazines|rss] — Radar\n"
+        "/status — статус последних запусков\n\n"
+        "<b>Radar (новости + наука):</b>\n"
+        "/radar_now [all|science|travel|wellness|magazines|rss] — запуск\n"
         "/radar_trash [N] — последние N помеченных мусором (default 20)\n"
         "/radar_seen [N] — последние N спарсенных (для дедупа, default 30)\n\n"
-        "<i>В разработке (Phase 2):</i>\n"
-        "/insight &lt;url&gt; — анализ Reddit-треда или YouTube-видео",
+        "<b>Insight (анализ ЦА):</b>\n"
+        "/insight &lt;reddit_url&gt; — разбор треда: боли, желания, триггеры, AEO",
         parse_mode="HTML",
     )
 

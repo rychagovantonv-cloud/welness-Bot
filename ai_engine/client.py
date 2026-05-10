@@ -9,7 +9,7 @@ from loguru import logger
 from pydantic import ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from ai_engine.schemas import RadarBatchResult, RadarCard
+from ai_engine.schemas import InsightReport, RadarBatchResult, RadarCard
 from config import settings
 from parsers.base import RawItem
 
@@ -125,3 +125,53 @@ async def summarize_radar_batch(items: list[RawItem]) -> tuple[list[RadarCard], 
         return [], cost
 
     return result.cards, cost
+
+
+SUBMIT_INSIGHT_TOOL = {
+    "name": "submit_insight_report",
+    "description": "Submit one structured InsightReport for the analyzed thread.",
+    "input_schema": InsightReport.model_json_schema(),
+}
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15), reraise=True)
+async def analyze_insight(thread_text: str) -> tuple[InsightReport | None, Decimal]:
+    """Прогоняет уже отформатированный тред через analyst-промпт.
+
+    Возвращает (отчёт, стоимость USD) либо (None, стоимость) если LLM не сумел.
+    """
+    client = get_client()
+    system_text = _load_prompt("insight_analyst")
+
+    response = await client.messages.create(
+        model=settings.anthropic_model,
+        max_tokens=4096,
+        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+        tools=[SUBMIT_INSIGHT_TOOL],
+        tool_choice={"type": "tool", "name": "submit_insight_report"},
+        messages=[{"role": "user", "content": thread_text}],
+    )
+
+    cost = _calculate_cost(response.usage.model_dump())
+    logger.info(
+        "anthropic insight call",
+        input_tok=response.usage.input_tokens,
+        output_tok=response.usage.output_tokens,
+        cost_usd=str(cost),
+    )
+
+    tool_use_block = next(
+        (b for b in response.content if getattr(b, "type", None) == "tool_use"), None
+    )
+    if tool_use_block is None:
+        logger.error("no tool_use in insight response", stop_reason=response.stop_reason)
+        return None, cost
+
+    try:
+        report = InsightReport.model_validate(tool_use_block.input)
+    except ValidationError as e:
+        logger.error("insight schema validation failed: {}", e)
+        logger.error("raw tool input: {}", json.dumps(tool_use_block.input)[:2000])
+        return None, cost
+
+    return report, cost
