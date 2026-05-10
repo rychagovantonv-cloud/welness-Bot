@@ -25,7 +25,7 @@ from ai_engine.schemas import RadarCard
 from bot.formatters import render_radar_card
 from bot.keyboards import CB_APPROVE_PREFIX, CB_TRASH_PREFIX, radar_card_kb
 from database.client import session_scope
-from database.models import RunLog
+from database.models import ParsedItem, RunLog
 from database.repos import approved as approved_repo
 from database.repos import dedup as dedup_repo
 from database.repos import feedback as feedback_repo
@@ -202,8 +202,15 @@ async def cb_approve(query: CallbackQuery) -> None:
         return
 
     user_id = query.from_user.id
+
+    async with session_scope() as session:
+        parsed_item = await session.get(ParsedItem, parsed_id)
+        original_title = parsed_item.title if parsed_item and parsed_item.title else card.title
+
     try:
-        commit = await commit_approved(card, approved_by=user_id)
+        commit = await commit_approved(
+            card, original_title=original_title, approved_by=user_id
+        )
     except Exception as e:
         logger.exception("github commit failed")
         await query.answer(f"GitHub упал: {str(e)[:100]}", show_alert=True)

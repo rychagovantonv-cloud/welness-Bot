@@ -40,11 +40,12 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return text[:max_len].rstrip("-") or "untitled"
 
 
-def _frontmatter(card: RadarCard, *, approved_by: int) -> str:
+def _frontmatter(card: RadarCard, original_title: str, *, approved_by: int) -> str:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return (
         "---\n"
         f"title: {_yaml_str(card.title)}\n"
+        f"original_title: {_yaml_str(original_title)}\n"
         f"source: {card.source}\n"
         f"source_url: {card.url}\n"
         f"transformation_type: {card.transformation_type}\n"
@@ -60,27 +61,32 @@ def _yaml_str(s: str) -> str:
     return f'"{s}"'
 
 
-def _build_markdown(card: RadarCard, *, approved_by: int) -> str:
+def _build_markdown(card: RadarCard, original_title: str, *, approved_by: int) -> str:
     return (
-        _frontmatter(card, approved_by=approved_by)
+        _frontmatter(card, original_title, approved_by=approved_by)
         + "\n"
         + f"# {card.title}\n\n"
-        + f"**Source:** [{card.source}]({card.url})\n\n"
-        + f"## Insight\n\n{card.summary}\n"
+        + f"_{original_title}_\n\n"
+        + f"**Источник:** [{card.source}]({card.url})\n\n"
+        + f"## Инсайт\n\n{card.summary}\n"
     )
 
 
-def _build_path(card: RadarCard) -> str:
+def _build_path(card: RadarCard, original_title: str) -> str:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    slug = _slugify(card.title)
+    # Slug from English original to keep file paths ASCII-clean.
+    # Если original пуст или весь не-ASCII — fall back на slug из card.title.
+    slug = _slugify(original_title)
+    if slug == "untitled":
+        slug = _slugify(card.title)
     return f"{card.transformation_type}/{today}-{slug}.md"
 
 
-def _commit_sync(card: RadarCard, *, approved_by: int) -> CommitResult:
+def _commit_sync(card: RadarCard, original_title: str, *, approved_by: int) -> CommitResult:
     repo = _get_repo()
-    path = _build_path(card)
-    content = _build_markdown(card, approved_by=approved_by)
-    message = f"Add: {card.title[:80]}"
+    path = _build_path(card, original_title)
+    content = _build_markdown(card, original_title, approved_by=approved_by)
+    message = f"Add: {original_title[:80] if original_title else card.title[:80]}"
 
     try:
         result = repo.create_file(path, message, content, branch="main")
@@ -98,10 +104,14 @@ def _commit_sync(card: RadarCard, *, approved_by: int) -> CommitResult:
     return CommitResult(sha=commit.sha, path=path, html_url=commit.html_url)
 
 
-async def commit_approved(card: RadarCard, *, approved_by: int) -> CommitResult:
+async def commit_approved(
+    card: RadarCard, *, original_title: str, approved_by: int
+) -> CommitResult:
     """Async-обёртка над PyGithub (sync API), уходит в thread pool."""
     try:
-        return await asyncio.to_thread(_commit_sync, card, approved_by=approved_by)
+        return await asyncio.to_thread(
+            _commit_sync, card, original_title, approved_by=approved_by
+        )
     except Exception as e:
         logger.error("github commit failed", error=str(e), title=card.title[:60])
         raise
