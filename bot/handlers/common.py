@@ -29,9 +29,9 @@ async def cmd_help(message: Message) -> None:
         "<b>Команды</b>\n"
         "/start — приветствие\n"
         "/help — этот список\n"
-        "/status — статус последних запусков\n\n"
-        "<i>В разработке (Phase 1+):</i>\n"
-        "/radar_now &lt;science|travel&gt; — ручной запуск Radar\n"
+        "/status — статус последних запусков\n"
+        "/radar_now [all|pubmed|rss] — ручной запуск Radar\n\n"
+        "<i>В разработке (Phase 2):</i>\n"
         "/insight &lt;url&gt; — анализ Reddit-треда или YouTube-видео",
         parse_mode="HTML",
     )
