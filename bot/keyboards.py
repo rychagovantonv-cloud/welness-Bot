@@ -4,6 +4,7 @@ CB_APPROVE_PREFIX = "rd_app:"
 CB_TRASH_PREFIX = "rd_trash:"
 CB_INSIGHT_SAVE_PREFIX = "in_save:"
 CB_INSIGHT_SKIP_PREFIX = "in_skip:"
+CB_INSIGHT_RUN_PREFIX = "in_run:"
 
 
 def radar_card_kb(parsed_item_id: int) -> InlineKeyboardMarkup:
@@ -16,6 +17,19 @@ def radar_card_kb(parsed_item_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="❌ Мусор", callback_data=f"{CB_TRASH_PREFIX}{parsed_item_id}"
                 ),
+            ]
+        ]
+    )
+
+
+def insight_run_kb(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔍 Разобрать",
+                    callback_data=f"{CB_INSIGHT_RUN_PREFIX}{token}",
+                )
             ]
         ]
     )

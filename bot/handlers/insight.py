@@ -10,6 +10,8 @@
 
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from html import escape
 from typing import Final
 
 from aiogram import F, Router
@@ -25,8 +27,10 @@ from bot.formatters import (
     render_pain_point,
 )
 from bot.keyboards import (
+    CB_INSIGHT_RUN_PREFIX,
     CB_INSIGHT_SAVE_PREFIX,
     CB_INSIGHT_SKIP_PREFIX,
+    insight_run_kb,
     insight_save_kb,
 )
 from integrations.github import commit_insight
@@ -34,6 +38,7 @@ from parsers.reddit import (
     fetch_thread,
     format_thread_for_llm,
     normalize_reddit_url,
+    search_threads,
 )
 
 router = Router(name="insight")
@@ -48,33 +53,15 @@ class _PendingInsight:
 
 
 _pending: Final[dict[str, _PendingInsight]] = {}
+_pending_search: Final[dict[str, str]] = {}  # token -> reddit URL для cb_insight_run
 
 
-@router.message(Command("insight"))
-async def cmd_insight(message: Message, command: CommandObject) -> None:
-    arg = (command.args or "").strip()
-    if not arg:
-        await message.answer(
-            "Использование: <code>/insight &lt;reddit_url&gt;</code>\n\n"
-            "Пример:\n"
-            "<code>/insight https://www.reddit.com/r/solotravel/comments/abc123/</code>\n\n"
-            "Бот вытащит топ-комментарии, прогонит через Claude и вернёт структурированный "
-            "разбор ЦА: боли, желания, триггеры, AEO-конспект.",
-            parse_mode="HTML",
-        )
-        return
-
-    if not normalize_reddit_url(arg):
-        await message.answer(
-            "Не похоже на Reddit URL. Жду что-то вроде "
-            "<code>https://reddit.com/r/&lt;sub&gt;/comments/&lt;id&gt;/</code>"
-        )
-        return
-
+async def _run_insight_pipeline(message: Message, url: str) -> None:
+    """Полный pipeline: fetch -> LLM -> render. Дёргается из /insight и из cb."""
     progress = await message.answer("⏳ Тяну тред с Reddit...")
 
     try:
-        thread = await fetch_thread(arg, top_n=80, max_depth=2)
+        thread = await fetch_thread(url, top_n=80, max_depth=2)
     except Exception as e:
         logger.exception("reddit fetch error")
         await progress.edit_text(f"❌ Reddit упал: <code>{str(e)[:200]}</code>")
@@ -117,26 +104,116 @@ async def cmd_insight(message: Message, command: CommandObject) -> None:
         slug=thread.slug,
     )
 
-    await progress.edit_text(
-        f"✅ Готово (стоимость: ${cost:.4f}). Отчёт ниже."
-    )
+    await progress.edit_text(f"✅ Готово (стоимость: ${cost:.4f}). Отчёт ниже.")
 
-    # Header
     await message.answer(
         render_insight_header(report, source_label, thread.url),
         disable_web_page_preview=True,
     )
-
-    # Каждая боль — отдельным сообщением (читаемее)
     for i, pp in enumerate(report.pain_points, 1):
         await message.answer(render_pain_point(pp, i), disable_web_page_preview=True)
-
-    # Tail с кнопкой save
     await message.answer(
         render_insight_tail(report),
         reply_markup=insight_save_kb(token),
         disable_web_page_preview=True,
     )
+
+
+@router.message(Command("insight"))
+async def cmd_insight(message: Message, command: CommandObject) -> None:
+    arg = (command.args or "").strip()
+    if not arg:
+        await message.answer(
+            "Использование: <code>/insight &lt;reddit_url&gt;</code>\n\n"
+            "Бот вытащит топ-комментарии, прогонит через Claude и вернёт "
+            "структурированный разбор ЦА.\n\n"
+            "Если хочешь чтобы бот САМ нашёл треды по теме — используй "
+            "<code>/insight_find &lt;тема&gt;</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    if not normalize_reddit_url(arg):
+        await message.answer(
+            "Не похоже на Reddit URL. Жду что-то вроде "
+            "<code>https://reddit.com/r/&lt;sub&gt;/comments/&lt;id&gt;/</code>"
+        )
+        return
+
+    await _run_insight_pipeline(message, arg)
+
+
+@router.message(Command("insight_find"))
+async def cmd_insight_find(message: Message, command: CommandObject) -> None:
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer(
+            "Использование: <code>/insight_find &lt;тема&gt;</code>\n\n"
+            "Примеры:\n"
+            "<code>/insight_find midlife crisis solo travel</code>\n"
+            "<code>/insight_find burnout meditation retreat</code>\n"
+            "<code>/insight_find divorce solo travel meaning</code>\n\n"
+            "Бот пройдёт по 18 курированным сабреддитам Reflective Traveler и "
+            "вернёт топ тредов с >20 комментов за последний месяц. "
+            "На каждом будет кнопка 🔍 Разобрать.",
+            parse_mode="HTML",
+        )
+        return
+
+    progress = await message.answer(f"⏳ Ищу треды по <i>{escape(query)}</i>...")
+
+    try:
+        hits = await search_threads(query, time_range="month", limit=10, min_comments=20)
+    except Exception as e:
+        logger.exception("reddit search failed")
+        await progress.edit_text(f"❌ Поиск упал: <code>{str(e)[:200]}</code>")
+        return
+
+    if not hits:
+        await progress.edit_text(
+            "🔍 Ничего не нашёл с >20 комментариев за месяц по этому запросу.\n"
+            "Попробуй другую формулировку или расширь — "
+            "<code>/insight_find</code> ищет в курированных сабреддитах."
+        )
+        return
+
+    top = hits[:10]
+    await progress.edit_text(
+        f"🔍 Найдено <b>{len(top)}</b> релевантных тредов. Жми 🔍 Разобрать на интересном:"
+    )
+
+    for hit in top:
+        token = secrets.token_urlsafe(8)
+        _pending_search[token] = hit.url
+        age_days = (datetime.now(timezone.utc).timestamp() - hit.created_utc) / 86400
+        text = (
+            f"<b>{escape(hit.title[:200])}</b>\n"
+            f"r/{escape(hit.subreddit)}  ·  {hit.num_comments} комм  ·  "
+            f"{hit.score} score  ·  {int(age_days)}д назад\n"
+            f"<a href=\"{escape(hit.url)}\">тред на reddit</a>"
+        )
+        await message.answer(
+            text, reply_markup=insight_run_kb(token), disable_web_page_preview=True
+        )
+
+
+@router.callback_query(F.data.startswith(CB_INSIGHT_RUN_PREFIX))
+async def cb_insight_run(query: CallbackQuery) -> None:
+    if not query.data or not query.message:
+        await query.answer()
+        return
+    token = query.data[len(CB_INSIGHT_RUN_PREFIX) :]
+    url = _pending_search.pop(token, None)
+    if url is None:
+        await query.answer("Ссылка устарела. Перезапусти /insight_find.", show_alert=True)
+        return
+    await query.answer("Запускаю анализ...")
+    # Убираем кнопку у исходного сообщения чтобы не нажали повторно
+    try:
+        await query.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _run_insight_pipeline(query.message, url)
 
 
 @router.callback_query(F.data.startswith(CB_INSIGHT_SAVE_PREFIX))

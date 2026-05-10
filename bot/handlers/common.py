@@ -36,7 +36,8 @@ async def cmd_help(message: Message) -> None:
         "/radar_trash [N] — последние N помеченных мусором (default 20)\n"
         "/radar_seen [N] — последние N спарсенных (для дедупа, default 30)\n\n"
         "<b>Insight (анализ ЦА):</b>\n"
-        "/insight &lt;reddit_url&gt; — разбор треда: боли, желания, триггеры, AEO",
+        "/insight &lt;reddit_url&gt; — разбор конкретного треда\n"
+        "/insight_find &lt;тема&gt; — бот САМ ищет треды по теме",
         parse_mode="HTML",
     )
 

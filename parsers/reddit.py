@@ -136,6 +136,141 @@ def _flatten_comments(
     return out
 
 
+@dataclass
+class RedditSearchHit:
+    title: str
+    subreddit: str
+    thread_id: str
+    permalink: str
+    num_comments: int
+    score: int
+    created_utc: float
+    snippet: str
+
+    @property
+    def url(self) -> str:
+        return f"https://www.reddit.com{self.permalink}"
+
+
+# Сабреддиты с релевантным голосом для Reflective Traveler.
+# Можно расширять — комментариями/PR.
+CURATED_SUBREDDITS: tuple[str, ...] = (
+    "solotravel",
+    "digitalnomad",
+    "femaletravels",
+    "Mindfulness",
+    "Buddhism",
+    "Meditation",
+    "midlife",
+    "decidingtobebetter",
+    "selfimprovement",
+    "Psychonaut",
+    "rationaldharma",
+    "transformative_travel",
+    "AskWomenOver30",
+    "AskMenOver30",
+    "burnout",
+    "ExistentialMemes",
+    "TheWayWeWere",
+    "spirituality",
+)
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10), reraise=True)
+async def _search_endpoint(
+    client: httpx.AsyncClient, *, query: str, subreddit: str | None,
+    time_range: str, sort: str, limit: int,
+) -> list[dict]:
+    base = "https://www.reddit.com"
+    if subreddit:
+        url = f"{base}/r/{subreddit}/search.json"
+        params = {"q": query, "restrict_sr": "1", "sort": sort, "t": time_range, "limit": limit}
+    else:
+        url = f"{base}/search.json"
+        params = {"q": query, "sort": sort, "t": time_range, "limit": limit}
+    r = await client.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    children = r.json().get("data", {}).get("children", [])
+    return [c.get("data", {}) for c in children if c.get("kind") == "t3"]
+
+
+async def search_threads(
+    query: str,
+    *,
+    subreddit: str | None = None,
+    time_range: str = "month",
+    sort: str = "top",
+    limit: int = 25,
+    min_comments: int = 20,
+    min_score: int = 10,
+    use_curated: bool = True,
+) -> list[RedditSearchHit]:
+    """Ищет треды по запросу.
+
+    Если subreddit задан — ищет внутри него.
+    Иначе если use_curated — параллельно опрашивает CURATED_SUBREDDITS, агрегирует.
+    Иначе — глобальный поиск по reddit.com.
+    """
+    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
+        all_hits: dict[str, dict] = {}  # dedup by thread id
+        try:
+            if subreddit:
+                rows = await _search_endpoint(
+                    client, query=query, subreddit=subreddit,
+                    time_range=time_range, sort=sort, limit=limit,
+                )
+                for d in rows:
+                    all_hits[d.get("id", "")] = d
+            elif use_curated:
+                # Параллельный fan-out по куратору, ограниченный таймаутом.
+                import asyncio as _aio
+                tasks = [
+                    _search_endpoint(
+                        client, query=query, subreddit=sr,
+                        time_range=time_range, sort=sort, limit=10,
+                    )
+                    for sr in CURATED_SUBREDDITS
+                ]
+                results = await _aio.gather(*tasks, return_exceptions=True)
+                for res in results:
+                    if isinstance(res, Exception):
+                        continue
+                    for d in res:
+                        all_hits[d.get("id", "")] = d
+            else:
+                rows = await _search_endpoint(
+                    client, query=query, subreddit=None,
+                    time_range=time_range, sort=sort, limit=limit,
+                )
+                for d in rows:
+                    all_hits[d.get("id", "")] = d
+        except Exception as e:
+            logger.error("reddit search failed", query=query[:80], error=str(e))
+            return []
+
+    hits: list[RedditSearchHit] = []
+    for d in all_hits.values():
+        nc = int(d.get("num_comments", 0))
+        sc = int(d.get("score", 0))
+        if nc < min_comments or sc < min_score:
+            continue
+        hits.append(
+            RedditSearchHit(
+                title=d.get("title", "")[:300],
+                subreddit=d.get("subreddit", ""),
+                thread_id=d.get("id", ""),
+                permalink=d.get("permalink", ""),
+                num_comments=nc,
+                score=sc,
+                created_utc=float(d.get("created_utc", 0)),
+                snippet=(d.get("selftext", "") or "")[:200],
+            )
+        )
+    # Sort by score desc
+    hits.sort(key=lambda h: h.score, reverse=True)
+    return hits
+
+
 def format_thread_for_llm(thread: RedditThread) -> str:
     parts = [
         f"# Subreddit: r/{thread.subreddit}",
