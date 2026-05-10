@@ -1,7 +1,7 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     )
 
     bot_token: SecretStr
-    allowed_users: list[int] = Field(default_factory=list)
+    allowed_users: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
     database_url: str
 
