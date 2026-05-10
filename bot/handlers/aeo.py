@@ -61,11 +61,11 @@ def _render_analysis_main(analysis: AeoAnalysis, models: list[str]) -> str:
 def _render_analysis_keywords(analysis: AeoAnalysis) -> str:
     keywords = "  ·  ".join(f"<code>{escape(k)}</code>" for k in analysis.recommended_keywords[:15])
     unique_lines = []
-    for model, items in analysis.unique_angles.items():
-        if not items:
+    for ua in analysis.unique_angles:
+        if not ua.angles:
             continue
-        unique_lines.append(f"<b>{escape(model)}:</b>")
-        for it in items[:5]:
+        unique_lines.append(f"<b>{escape(ua.model)}:</b>")
+        for it in ua.angles[:5]:
             unique_lines.append(f"  • {escape(it)}")
     unique_text = "\n".join(unique_lines) if unique_lines else "<i>(нет существенных)</i>"
 

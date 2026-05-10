@@ -201,52 +201,82 @@ async def search_threads(
     time_range: str = "month",
     sort: str = "top",
     limit: int = 25,
-    min_comments: int = 20,
-    min_score: int = 10,
+    min_comments: int = 10,
+    min_score: int = 5,
     use_curated: bool = True,
-) -> list[RedditSearchHit]:
-    """Ищет треды по запросу.
+) -> tuple[list[RedditSearchHit], dict[str, int]]:
+    """Ищет треды по запросу. Возвращает (hits, diag) где diag содержит
+    счётчики для отладки: subs_ok, subs_failed, raw_total, after_filter.
 
     Если subreddit задан — ищет внутри него.
-    Иначе если use_curated — параллельно опрашивает CURATED_SUBREDDITS, агрегирует.
-    Иначе — глобальный поиск по reddit.com.
+    Иначе если use_curated — параллельно опрашивает CURATED_SUBREDDITS,
+    при пустом результате fallback к глобальному поиску.
     """
-    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
-        all_hits: dict[str, dict] = {}  # dedup by thread id
-        try:
-            if subreddit:
-                rows = await _search_endpoint(
-                    client, query=query, subreddit=subreddit,
-                    time_range=time_range, sort=sort, limit=limit,
-                )
-                for d in rows:
-                    all_hits[d.get("id", "")] = d
-            elif use_curated:
-                # Параллельный fan-out по куратору, ограниченный таймаутом.
-                import asyncio as _aio
-                tasks = [
-                    _search_endpoint(
-                        client, query=query, subreddit=sr,
-                        time_range=time_range, sort=sort, limit=10,
-                    )
-                    for sr in CURATED_SUBREDDITS
-                ]
-                results = await _aio.gather(*tasks, return_exceptions=True)
-                for res in results:
-                    if isinstance(res, Exception):
-                        continue
-                    for d in res:
-                        all_hits[d.get("id", "")] = d
-            else:
+    diag = {"subs_ok": 0, "subs_failed": 0, "raw_total": 0, "after_filter": 0}
+
+    async with httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT}, follow_redirects=True
+    ) as client:
+        all_hits: dict[str, dict] = {}
+
+        async def _do_global() -> None:
+            try:
                 rows = await _search_endpoint(
                     client, query=query, subreddit=None,
                     time_range=time_range, sort=sort, limit=limit,
                 )
                 for d in rows:
                     all_hits[d.get("id", "")] = d
-        except Exception as e:
-            logger.error("reddit search failed", query=query[:80], error=str(e))
-            return []
+                diag["subs_ok"] += 1
+            except Exception as e:
+                logger.warning("reddit global search failed", error=str(e))
+                diag["subs_failed"] += 1
+
+        if subreddit:
+            try:
+                rows = await _search_endpoint(
+                    client, query=query, subreddit=subreddit,
+                    time_range=time_range, sort=sort, limit=limit,
+                )
+                for d in rows:
+                    all_hits[d.get("id", "")] = d
+                diag["subs_ok"] = 1
+            except Exception as e:
+                logger.warning("reddit single-sub search failed", sub=subreddit, error=str(e))
+                diag["subs_failed"] = 1
+        elif use_curated:
+            import asyncio as _aio
+            sem = _aio.Semaphore(6)  # вежливее к Reddit, не 18 одновременно
+
+            async def _one(sr: str) -> tuple[str, list[dict] | Exception]:
+                async with sem:
+                    try:
+                        rows = await _search_endpoint(
+                            client, query=query, subreddit=sr,
+                            time_range=time_range, sort=sort, limit=10,
+                        )
+                        return sr, rows
+                    except Exception as e:
+                        return sr, e
+
+            results = await _aio.gather(*(_one(sr) for sr in CURATED_SUBREDDITS))
+            for sr, res in results:
+                if isinstance(res, Exception):
+                    diag["subs_failed"] += 1
+                    logger.warning("reddit sub search failed", sub=sr, error=str(res))
+                    continue
+                diag["subs_ok"] += 1
+                for d in res:
+                    all_hits[d.get("id", "")] = d
+
+            # Fallback: если по куратору пусто — добиваем глобальным поиском
+            if not all_hits:
+                logger.info("curated search empty, falling back to global", query=query[:60])
+                await _do_global()
+        else:
+            await _do_global()
+
+    diag["raw_total"] = len(all_hits)
 
     hits: list[RedditSearchHit] = []
     for d in all_hits.values():
@@ -266,9 +296,10 @@ async def search_threads(
                 snippet=(d.get("selftext", "") or "")[:200],
             )
         )
-    # Sort by score desc
     hits.sort(key=lambda h: h.score, reverse=True)
-    return hits
+    diag["after_filter"] = len(hits)
+    logger.info("reddit search done", query=query[:60], **diag)
+    return hits, diag
 
 
 def format_thread_for_llm(thread: RedditThread) -> str:

@@ -232,9 +232,9 @@ def _build_aeo_markdown(
     parts.append("")
 
     parts.append("## Уникальные углы по моделям\n")
-    for model, items in analysis.unique_angles.items():
-        parts.append(f"### {model}")
-        for it in items:
+    for ua in analysis.unique_angles:
+        parts.append(f"### {ua.model}")
+        for it in ua.angles:
             parts.append(f"- {it}")
         parts.append("")
 

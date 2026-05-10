@@ -229,7 +229,7 @@ async def cmd_insight_find(message: Message, command: CommandObject) -> None:
     progress = await message.answer(f"⏳ Ищу треды по <i>{escape(query)}</i>...")
 
     try:
-        hits = await search_threads(query, time_range="month", limit=10, min_comments=20)
+        hits, diag = await search_threads(query, time_range="month", limit=10)
     except Exception as e:
         logger.exception("reddit search failed")
         await progress.edit_text(f"❌ Поиск упал: <code>{str(e)[:200]}</code>")
@@ -237,15 +237,22 @@ async def cmd_insight_find(message: Message, command: CommandObject) -> None:
 
     if not hits:
         await progress.edit_text(
-            "🔍 Ничего не нашёл с >20 комментариев за месяц по этому запросу.\n"
-            "Попробуй другую формулировку или расширь — "
-            "<code>/insight_find</code> ищет в курированных сабреддитах."
+            "🔍 По этому запросу ничего не нашлось.\n\n"
+            f"<i>Опросил сабов: {diag['subs_ok']} (упало: {diag['subs_failed']}). "
+            f"Сырых тредов: {diag['raw_total']}, после фильтра >10 комментов: "
+            f"{diag['after_filter']}.</i>\n\n"
+            "Попробуй другую формулировку: лучше работают конкретные фразы "
+            "(<code>solo travel divorce</code>, <code>burnout retreat</code>) "
+            "чем общие слова (<code>travel</code>, <code>life</code>).",
+            parse_mode="HTML",
         )
         return
 
     top = hits[:10]
     await progress.edit_text(
-        f"🔍 Найдено <b>{len(top)}</b> релевантных тредов. Жми 🔍 Разобрать на интересном:"
+        f"🔍 Найдено <b>{len(top)}</b> релевантных тредов "
+        f"<i>(из {diag['raw_total']} сырых, {diag['subs_ok']} сабов опрошено)</i>. "
+        "Жми 🔍 Разобрать на интересном:"
     )
 
     for hit in top:

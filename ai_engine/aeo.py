@@ -98,7 +98,7 @@ async def _meta_analyze(
 
     response = await client.messages.create(
         model=settings.anthropic_model,
-        max_tokens=3000,
+        max_tokens=6000,
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         tools=[SUBMIT_AEO_TOOL],
         tool_choice={"type": "tool", "name": "submit_aeo_analysis"},
@@ -106,6 +106,8 @@ async def _meta_analyze(
     )
 
     cost = _calculate_cost(response.usage.model_dump())
+    if response.stop_reason == "max_tokens":
+        logger.warning("aeo: hit max_tokens cap, output likely truncated")
     tool_use_block = next(
         (b for b in response.content if getattr(b, "type", None) == "tool_use"), None
     )
@@ -117,7 +119,7 @@ async def _meta_analyze(
         analysis = AeoAnalysis.model_validate(tool_use_block.input)
     except ValidationError as e:
         logger.error("aeo schema validation failed: {}", e)
-        logger.error("raw: {}", json.dumps(tool_use_block.input)[:2000])
+        logger.error("raw: {}", json.dumps(tool_use_block.input, ensure_ascii=False)[:3000])
         return None, cost
     return analysis, cost
 

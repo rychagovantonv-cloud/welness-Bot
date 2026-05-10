@@ -135,6 +135,16 @@ class AeoModelResponse(BaseModel):
     raw_text: str = Field(description="Полный ответ модели на запрос — без обработки.")
 
 
+class UniqueAngle(BaseModel):
+    """Угол одной конкретной модели — что есть у неё, чего нет у других."""
+
+    model: str = Field(description="Имя модели как в AeoModelResponse.model")
+    angles: list[str] = Field(
+        description="3-7 уникальных тем/брендов/советов от этой модели. На русском.",
+        min_length=1,
+    )
+
+
 class AeoAnalysis(BaseModel):
     """Мета-анализ ответов нескольких AI-моделей на один запрос."""
 
@@ -145,12 +155,11 @@ class AeoAnalysis(BaseModel):
         ),
         min_length=1,
     )
-    unique_angles: dict[str, list[str]] = Field(
+    unique_angles: list[UniqueAngle] = Field(
         description=(
-            "Что уникально у каждой модели. Ключ — имя модели, значение — список "
-            "уникальных тем/брендов/рекомендаций которые есть только у неё. "
-            "На русском."
+            "Список уникальных углов по каждой модели. По одному элементу на модель."
         ),
+        min_length=1,
     )
     dominant_narrative: str = Field(
         description=(
@@ -161,16 +170,15 @@ class AeoAnalysis(BaseModel):
     content_gaps: list[str] = Field(
         description=(
             "Где wellness-бренд может вклиниться: темы, которые AI обходит "
-            "стороной либо описывает поверхностно. На русском, 3-6 пунктов. "
-            "Это карта возможностей для контента."
+            "стороной либо описывает поверхностно. На русском, 3-6 пунктов."
         ),
         min_length=1,
     )
     recommended_keywords: list[str] = Field(
         description=(
-            "Ключевые фразы и формулировки которые AI повторяет — это сигнал какие "
-            "запросы они уже понимают. Используется для AEO-контента. 5-12 пунктов, "
-            "на оригинальном языке (англ если ответы на англ)."
+            "Ключевые фразы которые AI повторяет — для AEO-контента. 5-12 пунктов, "
+            "на оригинальном языке (англ если ответы на англ). Каждая фраза = "
+            "одна строка JSON-array, БЕЗ XML/HTML тегов."
         ),
         min_length=1,
     )
