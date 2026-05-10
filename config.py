@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     github_content_repo: str | None = None
 
     youtube_api_key: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-2.5-flash"
 
     sentry_dsn: SecretStr | None = None
     log_level: str = "INFO"

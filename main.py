@@ -18,7 +18,8 @@ from observability.sentry import setup_sentry
 BOT_COMMANDS = [
     BotCommand(command="radar", description="Запустить радар (новости + наука)"),
     BotCommand(command="poisk", description="Найти Reddit-треды по теме"),
-    BotCommand(command="razbor", description="Разбор треда по URL"),
+    BotCommand(command="razbor", description="Разбор треда (Reddit/YouTube) по URL"),
+    BotCommand(command="aeo", description="AEO: что AI говорит про вашу нишу"),
     BotCommand(command="musor", description="Что помечали мусором"),
     BotCommand(command="istoria", description="Что уже спарсено (для дедупа)"),
     BotCommand(command="status", description="Последние запуски"),

@@ -40,6 +40,7 @@ from parsers.reddit import (
     normalize_reddit_url,
     search_threads,
 )
+from parsers.youtube import fetch_video, format_video_for_llm, is_youtube_url
 
 router = Router(name="insight")
 
@@ -56,33 +57,62 @@ _pending: Final[dict[str, _PendingInsight]] = {}
 _pending_search: Final[dict[str, str]] = {}  # token -> reddit URL для cb_insight_run
 
 
-async def _run_insight_pipeline(message: Message, url: str) -> None:
-    """Полный pipeline: fetch -> LLM -> render. Дёргается из /insight и из cb."""
-    progress = await message.answer("⏳ Тяну тред с Reddit...")
-
-    try:
+async def _fetch_source(url: str) -> tuple[str, str, str, str] | None:
+    """Возвращает (formatted_text_for_llm, source_url, source_label, slug)
+    либо None если не смогли распарсить."""
+    if normalize_reddit_url(url):
         thread = await fetch_thread(url, top_n=80, max_depth=2)
-    except Exception as e:
-        logger.exception("reddit fetch error")
-        await progress.edit_text(f"❌ Reddit упал: <code>{str(e)[:200]}</code>")
-        return
+        if thread is None or (not thread.comments and not thread.op_body):
+            return None
+        return (
+            format_thread_for_llm(thread),
+            thread.url,
+            f"r/{thread.subreddit}: {thread.title[:80]}",
+            thread.slug,
+        )
+    if is_youtube_url(url):
+        video = await fetch_video(url, top_n=80)
+        if video is None or not video.comments:
+            return None
+        return (
+            format_video_for_llm(video),
+            video.url,
+            f"YT/{video.channel}: {video.title[:80]}",
+            video.slug,
+        )
+    return None
 
-    if thread is None:
-        await progress.edit_text(
-            "❌ Не смог распарсить тред. Проверь что URL рабочий и сабреддит публичный."
+
+async def _run_insight_pipeline(message: Message, url: str) -> None:
+    """Унифицированный pipeline: fetch (Reddit или YouTube) -> LLM -> render."""
+    if normalize_reddit_url(url):
+        progress = await message.answer("⏳ Тяну тред с Reddit...")
+    elif is_youtube_url(url):
+        progress = await message.answer("⏳ Тяну комменты с YouTube...")
+    else:
+        await message.answer(
+            "❓ Не понял URL. Поддерживаются:\n"
+            "• Reddit: <code>https://reddit.com/r/.../comments/...</code>\n"
+            "• YouTube: <code>https://youtube.com/watch?v=...</code> или <code>youtu.be/...</code>"
         )
         return
 
-    if not thread.comments and not thread.op_body:
-        await progress.edit_text("⚠️ Тред пустой (ни OP body, ни комментов).")
+    try:
+        fetched = await _fetch_source(url)
+    except Exception as e:
+        logger.exception("source fetch error")
+        await progress.edit_text(f"❌ Источник упал: <code>{str(e)[:200]}</code>")
         return
 
-    await progress.edit_text(
-        f"⏳ Получено: <b>{len(thread.comments)}</b> комментов из r/{thread.subreddit}.\n"
-        f"Шлю в Claude..."
-    )
+    if fetched is None:
+        await progress.edit_text(
+            "❌ Не смог распарсить (тред пустой / видео без комментов / URL битый)."
+        )
+        return
 
-    thread_text = format_thread_for_llm(thread)
+    thread_text, source_url, source_label, slug = fetched
+
+    await progress.edit_text(f"⏳ <b>{escape(source_label)}</b>\nШлю в Claude...")
 
     try:
         report, cost = await analyze_insight(thread_text)
@@ -95,19 +125,18 @@ async def _run_insight_pipeline(message: Message, url: str) -> None:
         await progress.edit_text("❌ LLM не сумел вернуть валидный отчёт. См. логи.")
         return
 
-    source_label = f"r/{thread.subreddit}: {thread.title[:80]}"
     token = secrets.token_urlsafe(8)
     _pending[token] = _PendingInsight(
         report=report,
-        source_url=thread.url,
+        source_url=source_url,
         source_label=source_label,
-        slug=thread.slug,
+        slug=slug,
     )
 
     await progress.edit_text(f"✅ Готово (стоимость: ${cost:.4f}). Отчёт ниже.")
 
     await message.answer(
-        render_insight_header(report, source_label, thread.url),
+        render_insight_header(report, source_label, source_url),
         disable_web_page_preview=True,
     )
     for i, pp in enumerate(report.pain_points, 1):
@@ -124,19 +153,24 @@ async def cmd_insight(message: Message, command: CommandObject) -> None:
     arg = (command.args or "").strip()
     if not arg:
         await message.answer(
-            "Использование: <code>/insight &lt;reddit_url&gt;</code>\n\n"
+            "Использование: <code>/razbor &lt;url&gt;</code>\n\n"
+            "Поддерживается:\n"
+            "• Reddit-тред: <code>https://reddit.com/r/.../comments/.../</code>\n"
+            "• YouTube-видео: <code>https://youtube.com/watch?v=...</code>\n\n"
             "Бот вытащит топ-комментарии, прогонит через Claude и вернёт "
             "структурированный разбор ЦА.\n\n"
-            "Если хочешь чтобы бот САМ нашёл треды по теме — используй "
-            "<code>/insight_find &lt;тема&gt;</code>.",
+            "Если хочешь чтобы бот САМ нашёл треды по теме — "
+            "<code>/poisk &lt;тема&gt;</code>.",
             parse_mode="HTML",
         )
         return
 
-    if not normalize_reddit_url(arg):
+    if not normalize_reddit_url(arg) and not is_youtube_url(arg):
         await message.answer(
-            "Не похоже на Reddit URL. Жду что-то вроде "
-            "<code>https://reddit.com/r/&lt;sub&gt;/comments/&lt;id&gt;/</code>"
+            "Не похоже на Reddit или YouTube URL.\n\n"
+            "Reddit: <code>https://reddit.com/r/&lt;sub&gt;/comments/&lt;id&gt;/</code>\n"
+            "YouTube: <code>https://youtube.com/watch?v=&lt;id&gt;</code>",
+            parse_mode="HTML",
         )
         return
 

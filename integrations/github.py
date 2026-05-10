@@ -9,7 +9,7 @@ from github import Auth, Github, GithubException
 from github.Repository import Repository
 from loguru import logger
 
-from ai_engine.schemas import InsightReport, RadarCard
+from ai_engine.schemas import AeoAnalysis, AeoModelResponse, InsightReport, RadarCard
 from config import settings
 
 
@@ -199,4 +199,107 @@ async def commit_insight(
         )
     except Exception as e:
         logger.error("github insight commit failed", error=str(e), label=source_label[:60])
+        raise
+
+
+# ---- AEO ----
+
+
+def _build_aeo_markdown(
+    query: str,
+    responses: list[AeoModelResponse],
+    analysis: AeoAnalysis,
+) -> str:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fm = (
+        "---\n"
+        f"query: {_yaml_str(query)}\n"
+        f"models: {[r.model for r in responses]}\n"
+        f"saved_at: {today}\n"
+        "---\n\n"
+    )
+    parts: list[str] = [
+        f"# AEO: {query}\n",
+        f"**Запрос:** _{query}_\n",
+        f"**Моделей опрошено:** {len(responses)}\n",
+        "## Доминирующий нарратив\n",
+        analysis.dominant_narrative,
+        "",
+        "## Общие темы\n",
+    ]
+    for t in analysis.common_themes:
+        parts.append(f"- {t}")
+    parts.append("")
+
+    parts.append("## Уникальные углы по моделям\n")
+    for model, items in analysis.unique_angles.items():
+        parts.append(f"### {model}")
+        for it in items:
+            parts.append(f"- {it}")
+        parts.append("")
+
+    parts.append("## Контентные пробелы (где можно вклиниться)\n")
+    for g in analysis.content_gaps:
+        parts.append(f"- {g}")
+    parts.append("")
+
+    parts.append("## Рекомендованные ключи (AEO)\n")
+    for k in analysis.recommended_keywords:
+        parts.append(f"- `{k}`")
+    parts.append("")
+
+    parts.append("## Что делать\n")
+    parts.append(analysis.summary)
+    parts.append("")
+
+    parts.append("---\n")
+    parts.append("## Сырые ответы моделей\n")
+    for r in responses:
+        parts.append(f"### {r.model}\n")
+        parts.append(r.raw_text)
+        parts.append("")
+
+    return fm + "\n".join(parts)
+
+
+def _commit_aeo_sync(
+    query: str,
+    responses: list[AeoModelResponse],
+    analysis: AeoAnalysis,
+    *,
+    slug: str,
+) -> CommitResult:
+    repo = _get_repo()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    safe_slug = _slugify(slug) or "query"
+    path = f"aeo/{today}-{safe_slug}.md"
+    content = _build_aeo_markdown(query, responses, analysis)
+    message = f"AEO: {query[:80]}"
+    try:
+        result = repo.create_file(path, message, content, branch="main")
+    except GithubException as e:
+        if e.status == 422:
+            ts = datetime.now(timezone.utc).strftime("%H%M%S")
+            base, ext = path.rsplit(".", 1)
+            path = f"{base}-{ts}.{ext}"
+            result = repo.create_file(path, message, content, branch="main")
+        else:
+            raise
+    commit = result["commit"]
+    return CommitResult(sha=commit.sha, path=path, html_url=commit.html_url)
+
+
+async def commit_aeo(
+    query: str,
+    responses: list[AeoModelResponse],
+    analysis: AeoAnalysis,
+    *,
+    slug: str,
+) -> CommitResult:
+    try:
+        return await asyncio.to_thread(
+            _commit_aeo_sync, query, responses, analysis, slug=slug
+        )
+    except Exception as e:
+        logger.error("github aeo commit failed", error=str(e), query=query[:60])
         raise

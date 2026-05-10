@@ -20,6 +20,8 @@ dependencies = [
     "sentry-sdk>=2.18",
     "PyGithub>=2.5",
     "tenacity>=9.0",
+    "google-api-python-client>=2.0",
+    "google-generativeai>=0.8",
 ]
 
 [project.optional-dependencies]

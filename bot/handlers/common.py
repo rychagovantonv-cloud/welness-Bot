@@ -36,8 +36,10 @@ async def cmd_help(message: Message) -> None:
         "/musor [N] — последние N помеченных мусором (default 20)\n"
         "/istoria [N] — последние N спарсенных (default 30)\n\n"
         "<b>🔍 Разбор ЦА:</b>\n"
-        "/razbor &lt;reddit_url&gt; — анализ конкретного треда\n"
+        "/razbor &lt;url&gt; — анализ Reddit-треда или YouTube-видео\n"
         "/poisk &lt;тема&gt; — бот САМ найдёт треды по теме\n\n"
+        "<b>🎯 AEO:</b>\n"
+        "/aeo &lt;запрос&gt; — что AI говорит про вашу нишу + контентные пробелы\n\n"
         "<i>Старые имена тоже работают: /radar_now, /radar_trash, "
         "/radar_seen, /insight, /insight_find.</i>",
         parse_mode="HTML",
