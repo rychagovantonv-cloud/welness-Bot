@@ -30,7 +30,9 @@ async def cmd_help(message: Message) -> None:
         "/start — приветствие\n"
         "/help — этот список\n"
         "/status — статус последних запусков\n"
-        "/radar_now [all|science|travel|wellness|magazines|rss] — Radar\n\n"
+        "/radar_now [all|science|travel|wellness|magazines|rss] — Radar\n"
+        "/radar_trash [N] — последние N помеченных мусором (default 20)\n"
+        "/radar_seen [N] — последние N спарсенных (для дедупа, default 30)\n\n"
         "<i>В разработке (Phase 2):</i>\n"
         "/insight &lt;url&gt; — анализ Reddit-треда или YouTube-видео",
         parse_mode="HTML",

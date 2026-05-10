@@ -18,14 +18,18 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
+from datetime import datetime, timezone
 from decimal import Decimal
+from html import escape
+
+from sqlalchemy import select
 
 from ai_engine.client import summarize_radar_batch
 from ai_engine.schemas import RadarCard
-from bot.formatters import render_radar_card
+from bot.formatters import SOURCE_EMOJI, render_radar_card
 from bot.keyboards import CB_APPROVE_PREFIX, CB_TRASH_PREFIX, radar_card_kb
 from database.client import session_scope
-from database.models import ParsedItem, RunLog
+from database.models import FeedbackTrash, ParsedItem, RunLog
 from database.repos import approved as approved_repo
 from database.repos import dedup as dedup_repo
 from database.repos import feedback as feedback_repo
@@ -250,6 +254,87 @@ async def cb_approve(query: CallbackQuery) -> None:
         disable_web_page_preview=True,
     )
     await query.answer("В работу")
+
+
+def _humanize_age(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - dt
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return f"{secs}с"
+    if secs < 3600:
+        return f"{secs // 60}м"
+    if secs < 86400:
+        return f"{secs // 3600}ч"
+    return f"{secs // 86400}д"
+
+
+@router.message(Command("radar_trash"))
+async def cmd_radar_trash(message: Message, command: CommandObject) -> None:
+    try:
+        limit = int(command.args.strip()) if command.args else 20
+    except ValueError:
+        limit = 20
+    limit = min(max(limit, 1), 50)
+
+    async with session_scope() as session:
+        stmt = (
+            select(FeedbackTrash, ParsedItem)
+            .join(ParsedItem, FeedbackTrash.parsed_item_id == ParsedItem.id)
+            .order_by(FeedbackTrash.rejected_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        rows = result.all()
+
+    if not rows:
+        await message.answer("🗑 <i>Корзина пуста.</i>", parse_mode="HTML")
+        return
+
+    lines = [f"🗑 <b>Последние {len(rows)} помеченных как мусор:</b>", ""]
+    for trash, item in rows:
+        emoji = SOURCE_EMOJI.get(item.source, "🔗")
+        age = _humanize_age(trash.rejected_at)
+        title = escape((item.title or "(без заголовка)")[:120])
+        url = escape(item.url or "")
+        lines.append(f"{emoji} <a href=\"{url}\">{title}</a>  <code>{age}</code>")
+    await message.answer(
+        "\n".join(lines), parse_mode="HTML", disable_web_page_preview=True
+    )
+
+
+@router.message(Command("radar_seen"))
+async def cmd_radar_seen(message: Message, command: CommandObject) -> None:
+    try:
+        limit = int(command.args.strip()) if command.args else 30
+    except ValueError:
+        limit = 30
+    limit = min(max(limit, 1), 100)
+
+    async with session_scope() as session:
+        stmt = (
+            select(ParsedItem)
+            .order_by(ParsedItem.parsed_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        items = result.scalars().all()
+
+    if not items:
+        await message.answer("📚 <i>Пока ничего не парсили.</i>", parse_mode="HTML")
+        return
+
+    lines = [f"📚 <b>Последние {len(items)} спарсенных (для дедупа):</b>", ""]
+    for item in items:
+        emoji = SOURCE_EMOJI.get(item.source, "🔗")
+        age = _humanize_age(item.parsed_at)
+        title = escape((item.title or "(без заголовка)")[:120])
+        url = escape(item.url or "")
+        lines.append(f"{emoji} <a href=\"{url}\">{title}</a>  <code>{age}</code>")
+    await message.answer(
+        "\n".join(lines), parse_mode="HTML", disable_web_page_preview=True
+    )
 
 
 @router.callback_query(F.data.startswith(CB_TRASH_PREFIX))

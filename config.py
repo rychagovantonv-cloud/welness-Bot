@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     github_token: SecretStr | None = None
     github_content_repo: str | None = None
 
+    youtube_api_key: SecretStr | None = None
+
     sentry_dsn: SecretStr | None = None
     log_level: str = "INFO"
     env: Literal["dev", "prod"] = "prod"
