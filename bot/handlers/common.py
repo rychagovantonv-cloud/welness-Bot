@@ -4,8 +4,10 @@ from aiogram.types import Message
 from loguru import logger
 from sqlalchemy import select
 
+from bot.budget import format_budget_line
 from database.client import session_scope
 from database.models import RunLog
+from database.repos import runs as runs_repo
 
 router = Router(name="common")
 
@@ -50,20 +52,30 @@ async def cmd_help(message: Message) -> None:
 async def cmd_status(message: Message) -> None:
     async with session_scope() as session:
         result = await session.execute(
-            select(RunLog).order_by(RunLog.started_at.desc()).limit(5)
+            select(RunLog).order_by(RunLog.started_at.desc()).limit(8)
         )
         runs = result.scalars().all()
+        summary = await runs_repo.get_cost_summary(session)
+
+    budget_line = format_budget_line(None, summary)
 
     if not runs:
-        await message.answer("📊 Запусков ещё не было.")
+        await message.answer(
+            f"📊 Запусков ещё не было.\n\n{budget_line}", parse_mode="HTML"
+        )
         return
 
     lines = ["📊 <b>Последние запуски:</b>\n"]
     for r in runs:
         when = r.started_at.strftime("%m-%d %H:%M")
         status_icon = {"ok": "✅", "error": "❌", "partial": "⚠️"}.get(r.status or "", "▫️")
+        cost_str = f"${r.cost_usd:.4f}" if r.cost_usd else "—"
         lines.append(
-            f"{status_icon} <code>{r.job_name}</code> — {when} "
-            f"(всего: {r.items_total or 0}, отфильтровано: {r.items_kept or 0})"
+            f"{status_icon} <code>{r.job_name}</code> {when}  ·  "
+            f"{r.items_total or 0}/{r.items_kept or 0}/{r.items_sent or 0}  ·  {cost_str}"
         )
+    lines.append("")
+    lines.append("<i>Формат: всего/новых/отправлено</i>")
+    lines.append("")
+    lines.append(budget_line)
     await message.answer("\n".join(lines), parse_mode="HTML")

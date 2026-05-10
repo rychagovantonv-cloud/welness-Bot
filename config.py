@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -30,6 +31,9 @@ class Settings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     log_level: str = "INFO"
     env: Literal["dev", "prod"] = "prod"
+
+    # Budget tracking (no hard cap, только информационные индикаторы).
+    budget_monthly_usd: Decimal = Decimal("10.00")
 
     port: int = 8080
 

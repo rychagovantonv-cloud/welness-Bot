@@ -14,12 +14,16 @@ from loguru import logger
 
 from ai_engine.aeo import run_aeo
 from ai_engine.schemas import AeoAnalysis, AeoModelResponse
+from bot.budget import get_budget_line
 from bot.keyboards import (
     CB_AEO_SAVE_PREFIX,
     CB_AEO_SKIP_PREFIX,
     aeo_save_kb,
 )
 from config import settings
+from database.client import session_scope
+from database.models import RunLog
+from database.repos import runs as runs_repo
 from integrations.github import commit_aeo
 
 router = Router(name="aeo")
@@ -99,23 +103,49 @@ async def cmd_aeo(message: Message, command: CommandObject) -> None:
     progress_text += "..."
     progress = await message.answer(progress_text)
 
+    async with session_scope() as session:
+        run = await runs_repo.start(session, job_name="aeo")
+        run_id = run.id
+
     try:
         responses, analysis, cost = await run_aeo(query)
     except Exception as e:
         logger.exception("aeo failed")
         await progress.edit_text(f"❌ AEO упал: <code>{str(e)[:200]}</code>")
+        async with session_scope() as session:
+            run = await session.get(RunLog, run_id)
+            await runs_repo.finish(session, run, status="error", error=str(e))
         return
 
     if not responses:
+        async with session_scope() as session:
+            run = await session.get(RunLog, run_id)
+            await runs_repo.finish(
+                session, run, status="error", cost_usd=cost,
+                error="all models failed",
+            )
         await progress.edit_text("❌ Все модели отвалились. См. логи.")
         return
 
     if analysis is None:
+        async with session_scope() as session:
+            run = await session.get(RunLog, run_id)
+            await runs_repo.finish(
+                session, run, status="partial", cost_usd=cost,
+                items_total=len(responses), error="meta-analyzer failed",
+            )
         await progress.edit_text(
             "⚠️ Получил ответы моделей но мета-анализатор не сработал. "
             f"Стоимость: ${cost:.4f}. Попробуй другой запрос."
         )
         return
+
+    async with session_scope() as session:
+        run = await session.get(RunLog, run_id)
+        await runs_repo.finish(
+            session, run, status="ok", cost_usd=cost,
+            items_total=len(responses), items_sent=len(responses),
+        )
 
     token = secrets.token_urlsafe(8)
     _pending[token] = _PendingAeo(query=query, responses=responses, analysis=analysis)
@@ -124,8 +154,9 @@ async def cmd_aeo(message: Message, command: CommandObject) -> None:
     if not has_gemini:
         models_str += "  ⚠️ <i>Gemini не настроен — только Claude</i>"
 
+    budget_line = await get_budget_line(cost)
     await progress.edit_text(
-        f"✅ AEO готово (модели: {models_str}, ${cost:.4f})"
+        f"✅ AEO готово (модели: {models_str})\n{budget_line}"
     )
 
     # Сначала сырые ответы моделей (краткие, по одному сообщению на модель)

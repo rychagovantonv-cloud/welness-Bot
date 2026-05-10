@@ -21,11 +21,15 @@ from loguru import logger
 
 from ai_engine.client import analyze_insight
 from ai_engine.schemas import InsightReport
+from bot.budget import get_budget_line
 from bot.formatters import (
     render_insight_header,
     render_insight_tail,
     render_pain_point,
 )
+from database.client import session_scope
+from database.models import RunLog
+from database.repos import runs as runs_repo
 from bot.keyboards import (
     CB_INSIGHT_RUN_PREFIX,
     CB_INSIGHT_SAVE_PREFIX,
@@ -87,8 +91,10 @@ async def _run_insight_pipeline(message: Message, url: str) -> None:
     """Унифицированный pipeline: fetch (Reddit или YouTube) -> LLM -> render."""
     if normalize_reddit_url(url):
         progress = await message.answer("⏳ Тяну тред с Reddit...")
+        job_name = "insight:reddit"
     elif is_youtube_url(url):
         progress = await message.answer("⏳ Тяну комменты с YouTube...")
+        job_name = "insight:youtube"
     else:
         await message.answer(
             "❓ Не понял URL. Поддерживаются:\n"
@@ -97,17 +103,27 @@ async def _run_insight_pipeline(message: Message, url: str) -> None:
         )
         return
 
+    async with session_scope() as session:
+        run = await runs_repo.start(session, job_name=job_name)
+        run_id = run.id
+
     try:
         fetched = await _fetch_source(url)
     except Exception as e:
         logger.exception("source fetch error")
         await progress.edit_text(f"❌ Источник упал: <code>{str(e)[:200]}</code>")
+        async with session_scope() as session:
+            run = await session.get(RunLog, run_id)
+            await runs_repo.finish(session, run, status="error", error=str(e))
         return
 
     if fetched is None:
         await progress.edit_text(
             "❌ Не смог распарсить (тред пустой / видео без комментов / URL битый)."
         )
+        async with session_scope() as session:
+            run = await session.get(RunLog, run_id)
+            await runs_repo.finish(session, run, status="error", error="empty source")
         return
 
     thread_text, source_url, source_label, slug = fetched
@@ -119,11 +135,26 @@ async def _run_insight_pipeline(message: Message, url: str) -> None:
     except Exception as e:
         logger.exception("insight LLM error")
         await progress.edit_text(f"❌ LLM упал: <code>{str(e)[:200]}</code>")
+        async with session_scope() as session:
+            run = await session.get(RunLog, run_id)
+            await runs_repo.finish(session, run, status="error", error=str(e))
         return
 
     if report is None:
+        async with session_scope() as session:
+            run = await session.get(RunLog, run_id)
+            await runs_repo.finish(
+                session, run, status="error", cost_usd=cost,
+                error="LLM returned no valid report",
+            )
         await progress.edit_text("❌ LLM не сумел вернуть валидный отчёт. См. логи.")
         return
+
+    async with session_scope() as session:
+        run = await session.get(RunLog, run_id)
+        await runs_repo.finish(
+            session, run, status="ok", items_total=1, items_sent=1, cost_usd=cost,
+        )
 
     token = secrets.token_urlsafe(8)
     _pending[token] = _PendingInsight(
@@ -133,7 +164,8 @@ async def _run_insight_pipeline(message: Message, url: str) -> None:
         slug=slug,
     )
 
-    await progress.edit_text(f"✅ Готово (стоимость: ${cost:.4f}). Отчёт ниже.")
+    budget_line = await get_budget_line(cost)
+    await progress.edit_text(f"✅ Готово. Отчёт ниже.\n{budget_line}")
 
     await message.answer(
         render_insight_header(report, source_label, source_url),

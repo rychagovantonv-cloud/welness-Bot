@@ -26,6 +26,7 @@ from sqlalchemy import select
 
 from ai_engine.client import summarize_radar_batch
 from ai_engine.schemas import RadarCard
+from bot.budget import get_budget_line
 from bot.formatters import SOURCE_EMOJI, render_radar_card
 from bot.keyboards import CB_APPROVE_PREFIX, CB_TRASH_PREFIX, radar_card_kb
 from database.client import session_scope
@@ -149,16 +150,10 @@ async def _process_and_send(message: Message, scope: str) -> None:
             await message.answer(
                 render_radar_card(card),
                 reply_markup=radar_card_kb(parsed_id),
-                disable_web_page_preview=False,
+                disable_web_page_preview=True,
             )
             sent_count += 1
             await asyncio.sleep(0.3)  # лёгкий троттлинг по TG
-
-        await progress.edit_text(
-            f"✅ <code>{job_name}</code>\n"
-            f"Всего: {total}, новых: {new_count}, отправлено: {sent_count}, "
-            f"стоимость: ${cost or 0:.4f}"
-        )
 
         async with session_scope() as session:
             run = await session.get(RunLog, run_id)
@@ -171,6 +166,13 @@ async def _process_and_send(message: Message, scope: str) -> None:
                 items_sent=sent_count,
                 cost_usd=cost,
             )
+
+        budget_line = await get_budget_line(cost)
+        await progress.edit_text(
+            f"✅ <code>{job_name}</code>\n"
+            f"Всего: {total}, новых: {new_count}, отправлено: {sent_count}\n"
+            f"{budget_line}"
+        )
 
     except Exception as e:
         logger.exception("radar pipeline error")
